@@ -1,0 +1,75 @@
+#!/usr/bin/env python3
+# saferun
+import sys, os, subprocess, json, yaml
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "py"))
+from signature_check import verify_signature
+
+def load_policy():
+    policy_path = os.path.join(os.path.dirname(__file__), "policy.yaml")
+    with open(policy_path) as f:
+        return yaml.safe_load(f)
+
+def select_profile(policies, signer_name, ok):
+    cleaned = signer_name.replace("subject=", "").strip() if signer_name else "UNKNOWN"
+    if ok and cleaned in policies.get("signers", {}):
+        return policies["signers"][cleaned], cleaned
+    return policies["unknown_signer"], "UNKNOWN"
+
+def main():
+    if len(sys.argv) < 2:
+        print("usage: saferun <binary> [args...]")
+        sys.exit(1)
+    binary = sys.argv[1]
+    args = sys.argv[2:]
+
+    signer_name, ok = verify_signature(binary)
+    print(f"[saferun] signer={signer_name}, sig_ok={ok}")
+
+    policies = load_policy()
+    profile, resolved = select_profile(policies, signer_name, ok)
+    print(f"[saferun] applying policy for {resolved}")
+
+    sock_path = f"/tmp/saferun-{os.getpid()}.sock"
+    env_ctrl = os.environ.copy()
+    env_ctrl["POLICY_JSON"] = json.dumps(profile)
+    env_ctrl["SAFERUN_SOCK"] = sock_path
+
+    # ensure old socket cleaned
+    try:
+        if os.path.exists(sock_path):
+            os.unlink(sock_path)
+    except: pass
+
+    script_dir = os.path.dirname(__file__)
+    controller_path = os.path.join(script_dir, "controller")
+    controller_proc = subprocess.Popen([controller_path], env=env_ctrl)
+
+    # prepare env for target with shim injection
+    env_target = os.environ.copy()
+    env_target["SAFERUN_SOCK"] = sock_path
+    # platform specific injection
+    if sys.platform == "darwin":
+        preload_path = os.path.join(script_dir, "preload.dylib")
+        env_target["DYLD_INSERT_LIBRARIES"] = os.path.abspath(preload_path)
+    else:
+        preload_path = os.path.join(script_dir, "preload.so")
+        env_target["LD_PRELOAD"] = os.path.abspath(preload_path)
+
+    # start target
+    target_proc = subprocess.Popen([binary] + args, env=env_target)
+    try:
+        exit_code = target_proc.wait()
+    finally:
+        try:
+            controller_proc.terminate()
+        except:
+            pass
+        try:
+            if os.path.exists(sock_path):
+                os.unlink(sock_path)
+        except:
+            pass
+    sys.exit(exit_code)
+
+if __name__ == "__main__":
+    main()

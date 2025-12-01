@@ -12,9 +12,11 @@
 #include <string.h>
 #include <stdlib.h>
 
+//typedef int (*open_t)(const char*,int,...);
 typedef int (*openat_t)(int,const char*,int,...);
 typedef int (*connect_t)(int,const struct sockaddr*,socklen_t);
 
+//static open_t real_open = NULL;
 static openat_t real_openat = NULL;
 static connect_t real_connect = NULL;
 
@@ -39,10 +41,28 @@ static void send_event(const char *etype, const char *detail) {
 
 __attribute__((constructor))
 static void init_hooks(void) {
+    //real_open = (open_t)dlsym(RTLD_NEXT, "open");
     real_openat = (openat_t)dlsym(RTLD_NEXT, "openat");
     real_connect = (connect_t)dlsym(RTLD_NEXT, "connect");
     // you can dlsym other functions here
 }
+
+/*
+int open(const char *pathname, int flags, ...) {
+    if (pathname) send_event("file", pathname);
+
+    mode_t mode = 0;
+    if (flags & O_CREAT) {
+        va_list ap;
+        va_start(ap, flags);
+        mode = va_arg(ap, int);
+        va_end(ap);
+        return real_open(pathname, flags, mode);
+    }
+    return real_open(pathname, flags);
+}
+*/
+
 
 int openat(int dirfd, const char *pathname, int flags, ...) {
     if (pathname) send_event("file", pathname);

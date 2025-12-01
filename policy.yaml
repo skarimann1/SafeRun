@@ -1,0 +1,29 @@
+signers:
+  "CN=Microsoft Corporation,O=Microsoft":
+    allowed_paths:
+      - "/tmp/**"
+      - "/opt/microsoft/**"
+    denied_paths:
+      - "/etc/**"
+      - "~/.ssh/**"
+    allow_network: true
+    allow_privilege_escalation: false
+
+  "CN=Oracle Software,O=Oracle":
+    allowed_paths:
+      - "/tmp/**"
+      - "/opt/oracle/**"
+    denied_paths:
+      - "/etc/**"
+      - "~/.ssh/**"
+    allow_network: false
+    allow_privilege_escalation: false
+
+unknown_signer:
+  allowed_paths:
+    - "/tmp/**"
+  denied_paths:
+    - "/etc/**"
+    - "~/.ssh/**"
+  allow_network: false
+  allow_privilege_escalation: false
