@@ -1,0 +1,59 @@
+#!/usr/bin/env python3
+# controller
+import os, socket, json, signal, fnmatch, sys
+
+def path_denied(path, profile):
+    for pat in profile.get("denied_paths", []):
+        if fnmatch.fnmatch(path, pat):
+            return True
+    return False
+
+def handle_file(evt, profile):
+    fpath = evt.get("detail","")
+    pid = evt.get("pid",0)
+    if path_denied(fpath, profile):
+        print(f"[BLOCK] pid={pid} tried file {fpath}")
+        try: os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError: pass
+    else:
+        print(f"[ALLOW] pid={pid} file {fpath}")
+
+def handle_net(evt, profile):
+    pid = evt.get("pid",0)
+    if not profile.get("allow_network", False):
+        print(f"[BLOCK] pid={pid} tried net {evt.get('detail')}")
+        try: os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError: pass
+    else:
+        print(f"[ALLOW] pid={pid} net {evt.get('detail')}")
+
+def main():
+    if "POLICY_JSON" not in os.environ or "SAFERUN_SOCK" not in os.environ:
+        print("POLICY_JSON and SAFERUN_SOCK must be set")
+        sys.exit(1)
+    profile = json.loads(os.environ["POLICY_JSON"])
+    sock_path = os.environ["SAFERUN_SOCK"]
+    if os.path.exists(sock_path):
+        try: os.unlink(sock_path)
+        except: pass
+
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+    s.bind(sock_path)
+    os.chmod(sock_path, 0o600)
+    print("[controller] policy loaded")
+    while True:
+        data, _ = s.recvfrom(4096)
+        try:
+            evt = json.loads(data.decode())
+        except:
+            continue
+        etype = evt.get("type")
+        if etype == "file":
+            handle_file(evt, profile)
+        elif etype == "net":
+            handle_net(evt, profile)
+        else:
+            print("[INFO] unknown event", evt)
+
+if __name__ == "__main__":
+    main()
