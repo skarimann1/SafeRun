@@ -12,6 +12,11 @@
 #include <string.h>
 #include <stdlib.h>
 #include <errno.h>
+#include <sys/syscall.h>
+
+
+typedef int (*execve_t)(const char*, char *const[], char *const[]);
+static execve_t real_execve = NULL;
 
 // macOS interpose macro
 #define DYLD_INTERPOSE(_replacement, _original) \
@@ -84,6 +89,7 @@ static int ask_controller(const char *etype, const char *detail) {
 __attribute__((constructor))
 static void init_hooks(void) {
     fprintf(stderr, "[shim] loaded, pid=%d\n", (int)getpid());
+    real_execve = (execve_t)dlsym(RTLD_NEXT, "execve");
 }
 
 // Replacement functions - call original via the real symbol
@@ -108,6 +114,26 @@ int my_open(const char *pathname, int flags, ...) {
         return open(pathname, flags, mode);
     }
     return open(pathname, flags);
+}
+
+int my_execve(const char *pathname, char *const argv[], char *const envp[]) {
+    fprintf(stderr, "[shim] execve() called: path=%s\n", pathname ? pathname : "(null)");
+
+    if (pathname) {
+        int verdict = ask_controller("exec", pathname);
+        if (verdict == 0) {
+            fprintf(stderr, "[shim] BLOCKED execve(%s)\n", pathname);
+            errno = EACCES;
+            return -1;
+        }
+    }
+
+    // Remove DYLD_INSERT_LIBRARIES from environment to prevent injection into child
+    extern char **environ;
+    
+    // Use syscall directly
+    #include <sys/syscall.h>
+    return syscall(SYS_execve, pathname, argv, envp ? envp : environ);
 }
 
 int my_connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
@@ -139,3 +165,4 @@ int my_connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
 // Register interposers
 DYLD_INTERPOSE(my_open, open)
 DYLD_INTERPOSE(my_connect, connect)
+DYLD_INTERPOSE(my_execve, execve)

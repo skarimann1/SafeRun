@@ -9,6 +9,9 @@ signers:
       - "~/.ssh/**"
     allow_network: true
     allow_privilege_escalation: false
+    allowed_executables: []   # allow all executables
+    denied_executables:
+      - "/bin/rm"
 
   "CN=Oracle Software,O=Oracle":
     allowed_paths:
@@ -20,6 +23,14 @@ signers:
       - "~/.ssh/**"
     allow_network: false
     allow_privilege_escalation: false
+    allowed_executables:
+      - "/bin/ls"
+      - "/usr/bin/grep"
+      - "/usr/bin/cat"
+    denied_executables:
+      - "/bin/sh"
+      - "/bin/bash"
+      - "/bin/zsh"
 
 unknown_signer:
   allowed_paths:
@@ -29,3 +40,6 @@ unknown_signer:
     - "/etc/**"
     - "~/.ssh/**"
   allow_network: false
+  allow_privilege_escalation: false
+  allowed_executables:
+    - "/**" # deny all executables

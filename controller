@@ -43,6 +43,31 @@ def path_allowed(path, profile):
     
     return False
 
+def exec_allowed(executable, profile):
+    """
+    Check if executable is allowed by policy.
+    Logic: denied_executables checked first, then must match allowed_executables.
+    """
+    allowed = profile.get("allowed_executables", [])
+    denied = profile.get("denied_executables", [])
+    
+    # Check denied first
+    for pattern in denied:
+        if match_pattern(executable, pattern):
+            return False
+    
+    # If no allowed list specified, allow all (that aren't denied)
+    if not allowed:
+        return True
+    
+    # Must match at least one allowed pattern
+    for pattern in allowed:
+        if match_pattern(executable, pattern):
+            return True
+    
+    return False
+
+
 def handle_file(evt, profile):
     fpath = evt.get("detail", "")
     pid = evt.get("pid", 0)
@@ -67,24 +92,42 @@ def handle_net(evt, profile):
 
 def handle_client(conn, profile):
     try:
-        data = conn.recv(4096)
-        if not data:
-            return
+        data = conn.recv(4096).decode('utf-8').strip()
+        event = json.loads(data)
         
-        msg = data.decode().strip()
-        evt = json.loads(msg)
+        etype = event.get("type")
+        detail = event.get("detail", "")
+        pid = event.get("pid", "?")
         
-        etype = evt.get("type")
+        verdict = "allow"
+        
         if etype == "file":
-            verdict = handle_file(evt, profile)
-        elif etype == "net":
-            verdict = handle_net(evt, profile)
-        else:
-            print(f"[INFO] unknown event type: {etype}", flush=True)
-            verdict = {"verdict": "deny"}
+            if not path_allowed(detail, profile):
+                verdict = "deny"
+                print(f"[DENY] pid={pid} file {detail}")
+            else:
+                print(f"[ALLOW] pid={pid} file {detail}")
         
-        response = json.dumps(verdict) + "\n"
-        conn.sendall(response.encode())
+        elif etype == "net":
+            if not profile.get("allow_network", False):
+                verdict = "deny"
+                print(f"[DENY] pid={pid} net {detail}")
+            else:
+                print(f"[ALLOW] pid={pid} net {detail}")
+        
+        # NEW: handle exec events
+        elif etype == "exec":
+            if not exec_allowed(detail, profile):
+                verdict = "deny"
+                print(f"[DENY] pid={pid} exec {detail}")
+            else:
+                print(f"[ALLOW] pid={pid} exec {detail}")
+        
+        else:
+            print(f"[WARN] unknown event type: {etype}")
+        
+        response = json.dumps({"verdict": verdict}) + "\n"
+        conn.send(response.encode('utf-8'))
     except Exception as e:
         print(f"[controller] client error: {e}", flush=True)
     finally:
