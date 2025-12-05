@@ -1,59 +1,137 @@
 #!/usr/bin/env python3
 # controller
-import os, socket, json, signal, fnmatch, sys
+import os
+import socket
+import json
+import sys
+import threading
 
-def path_denied(path, profile):
+def match_pattern(path, pattern):
+    """
+    Match path against pattern with ** (recursive) and * (single level) support.
+    """
+    # Expand ~ to home directory
+    pattern = os.path.expanduser(pattern)
+    path = os.path.abspath(path)
+    
+    if '**' in pattern:
+        # /etc/** means anything under /etc/
+        prefix = pattern.replace('/**', '')
+        return path == prefix or path.startswith(prefix + '/')
+    elif '*' in pattern:
+        import fnmatch
+        return fnmatch.fnmatch(path, pattern)
+    else:
+        return path == pattern
+
+def path_allowed(path, profile):
+    """
+    Check if path is allowed by policy.
+    Logic: DENY if in denied_paths, else ALLOW if in allowed_paths, else DENY
+    """
     for pat in profile.get("denied_paths", []):
-        if fnmatch.fnmatch(path, pat):
+        if match_pattern(path, pat):
+            return False
+    
+    allowed = profile.get("allowed_paths", [])
+    if not allowed:
+        return False
+    
+    for pat in allowed:
+        if match_pattern(path, pat):
             return True
+    
     return False
 
 def handle_file(evt, profile):
-    fpath = evt.get("detail","")
-    pid = evt.get("pid",0)
-    if path_denied(fpath, profile):
-        print(f"[BLOCK] pid={pid} tried file {fpath}")
-        try: os.kill(pid, signal.SIGKILL)
-        except ProcessLookupError: pass
+    fpath = evt.get("detail", "")
+    pid = evt.get("pid", 0)
+    
+    if path_allowed(fpath, profile):
+        print(f"[ALLOW] pid={pid} file {fpath}", flush=True)
+        return {"verdict": "allow"}
     else:
-        print(f"[ALLOW] pid={pid} file {fpath}")
+        print(f"[DENY] pid={pid} file {fpath}", flush=True)
+        return {"verdict": "deny"}
 
 def handle_net(evt, profile):
-    pid = evt.get("pid",0)
-    if not profile.get("allow_network", False):
-        print(f"[BLOCK] pid={pid} tried net {evt.get('detail')}")
-        try: os.kill(pid, signal.SIGKILL)
-        except ProcessLookupError: pass
+    pid = evt.get("pid", 0)
+    detail = evt.get("detail", "")
+    
+    if profile.get("allow_network", False):
+        print(f"[ALLOW] pid={pid} net {detail}", flush=True)
+        return {"verdict": "allow"}
     else:
-        print(f"[ALLOW] pid={pid} net {evt.get('detail')}")
+        print(f"[DENY] pid={pid} net {detail}", flush=True)
+        return {"verdict": "deny"}
+
+def handle_client(conn, profile):
+    try:
+        data = conn.recv(4096)
+        if not data:
+            return
+        
+        msg = data.decode().strip()
+        evt = json.loads(msg)
+        
+        etype = evt.get("type")
+        if etype == "file":
+            verdict = handle_file(evt, profile)
+        elif etype == "net":
+            verdict = handle_net(evt, profile)
+        else:
+            print(f"[INFO] unknown event type: {etype}", flush=True)
+            verdict = {"verdict": "deny"}
+        
+        response = json.dumps(verdict) + "\n"
+        conn.sendall(response.encode())
+    except Exception as e:
+        print(f"[controller] client error: {e}", flush=True)
+    finally:
+        conn.close()
 
 def main():
     if "POLICY_JSON" not in os.environ or "SAFERUN_SOCK" not in os.environ:
-        print("POLICY_JSON and SAFERUN_SOCK must be set")
+        print("POLICY_JSON and SAFERUN_SOCK must be set", flush=True)
         sys.exit(1)
+    
     profile = json.loads(os.environ["POLICY_JSON"])
     sock_path = os.environ["SAFERUN_SOCK"]
+    ready_path = os.environ.get("SAFERUN_READY", sock_path + ".ready")
+    
     if os.path.exists(sock_path):
-        try: os.unlink(sock_path)
-        except: pass
-
-    s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
-    s.bind(sock_path)
-    os.chmod(sock_path, 0o600)
-    print("[controller] policy loaded")
-    while True:
-        data, _ = s.recvfrom(4096)
         try:
-            evt = json.loads(data.decode())
+            os.unlink(sock_path)
         except:
-            continue
-        etype = evt.get("type")
-        if etype == "file":
-            handle_file(evt, profile)
-        elif etype == "net":
-            handle_net(evt, profile)
-        else:
-            print("[INFO] unknown event", evt)
+            pass
+    
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.bind(sock_path)
+    s.listen(16)
+    os.chmod(sock_path, 0o600)
+    
+    print(f"[controller] policy loaded: {profile}", flush=True)
+    print(f"[controller] listening on {sock_path}", flush=True)
+    
+    with open(ready_path, 'w') as f:
+        f.write(str(os.getpid()))
+    
+    print(f"[controller] ready (signaled via {ready_path})", flush=True)
+    
+    try:
+        while True:
+            try:
+                conn, _ = s.accept()
+                t = threading.Thread(target=handle_client, args=(conn, profile), daemon=True)
+                t.start()
+            except Exception as e:
+                print(f"[controller] accept error: {e}", flush=True)
+    finally:
+        try:
+            os.unlink(ready_path)
+        except:
+            pass
 
 if __name__ == "__main__":
     main()

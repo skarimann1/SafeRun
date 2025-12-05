@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 # saferun
-import sys, os, subprocess, json, yaml
+import sys
+import os
+import subprocess
+import json
+import yaml
+import time
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "py"))
 from signature_check import verify_signature
 
@@ -15,10 +21,19 @@ def select_profile(policies, signer_name, ok):
         return policies["signers"][cleaned], cleaned
     return policies["unknown_signer"], "UNKNOWN"
 
+def wait_for_ready(ready_path, timeout=5.0):
+    start = time.time()
+    while time.time() - start < timeout:
+        if os.path.exists(ready_path):
+            return True
+        time.sleep(0.01)
+    return False
+
 def main():
     if len(sys.argv) < 2:
         print("usage: saferun <binary> [args...]")
         sys.exit(1)
+    
     binary = sys.argv[1]
     args = sys.argv[2:]
 
@@ -30,45 +45,60 @@ def main():
     print(f"[saferun] applying policy for {resolved}")
 
     sock_path = f"/tmp/saferun-{os.getpid()}.sock"
+    ready_path = sock_path + ".ready"
+    
+    for p in [sock_path, ready_path]:
+        try:
+            if os.path.exists(p):
+                os.unlink(p)
+        except:
+            pass
+
+    script_dir = os.path.dirname(os.path.abspath(__file__))
     env_ctrl = os.environ.copy()
     env_ctrl["POLICY_JSON"] = json.dumps(profile)
     env_ctrl["SAFERUN_SOCK"] = sock_path
+    env_ctrl["SAFERUN_READY"] = ready_path
 
-    # ensure old socket cleaned
-    try:
-        if os.path.exists(sock_path):
-            os.unlink(sock_path)
-    except: pass
-
-    script_dir = os.path.dirname(__file__)
     controller_path = os.path.join(script_dir, "controller")
     controller_proc = subprocess.Popen([controller_path], env=env_ctrl)
 
-    # prepare env for target with shim injection
+    if not wait_for_ready(ready_path):
+        print("[saferun] ERROR: controller failed to start in time", file=sys.stderr)
+        controller_proc.terminate()
+        sys.exit(1)
+    
+    print(f"[saferun] controller ready")
+
     env_target = os.environ.copy()
     env_target["SAFERUN_SOCK"] = sock_path
-    # platform specific injection
+
     if sys.platform == "darwin":
         preload_path = os.path.join(script_dir, "preload.dylib")
         env_target["DYLD_INSERT_LIBRARIES"] = os.path.abspath(preload_path)
+        env_target["DYLD_FORCE_FLAT_NAMESPACE"] = "1"
     else:
         preload_path = os.path.join(script_dir, "preload.so")
         env_target["LD_PRELOAD"] = os.path.abspath(preload_path)
 
-    # start target
     target_proc = subprocess.Popen([binary] + args, env=env_target)
+    
     try:
         exit_code = target_proc.wait()
     finally:
         try:
             controller_proc.terminate()
+            controller_proc.wait(timeout=1)
         except:
-            pass
-        try:
-            if os.path.exists(sock_path):
-                os.unlink(sock_path)
-        except:
-            pass
+            controller_proc.kill()
+        
+        for p in [sock_path, ready_path]:
+            try:
+                if os.path.exists(p):
+                    os.unlink(p)
+            except:
+                pass
+    
     sys.exit(exit_code)
 
 if __name__ == "__main__":

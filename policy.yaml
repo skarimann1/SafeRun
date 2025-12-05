@@ -3,6 +3,7 @@ signers:
     allowed_paths:
       - "/tmp/**"
       - "/opt/microsoft/**"
+      - "/Users/sakthi/Desktop/SafeRun/**"   
     denied_paths:
       - "/etc/**"
       - "~/.ssh/**"
@@ -13,6 +14,7 @@ signers:
     allowed_paths:
       - "/tmp/**"
       - "/opt/oracle/**"
+      - "/Users/sakthi/Desktop/SafeRun/**"   # or be more specific: "/Users/sakthi/Desktop/SafeRun/**"
     denied_paths:
       - "/etc/**"
       - "~/.ssh/**"
@@ -22,8 +24,8 @@ signers:
 unknown_signer:
   allowed_paths:
     - "/tmp/**"
+    - "/Users/sakthi/Desktop/SafeRun/**"   
   denied_paths:
     - "/etc/**"
     - "~/.ssh/**"
   allow_network: false
-  allow_privilege_escalation: false

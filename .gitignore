@@ -1,0 +1,31 @@
+# .gitignore
+
+*-key.pem
+*-cert.pem
+
+# Compiled binaries
+preload.dylib
+preload.so
+oracle_tool
+
+# Generated bundles
+demo/bundle_*/
+
+# Signatures
+*.sig
+
+# Temp files
+*.tmp
+*.sha256
+
+# Python cache
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
+
+# Socket files (usually in /tmp, but just in case)
+*.sock
+*.sock.ready
+    *.pem
